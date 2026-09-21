@@ -6,6 +6,10 @@ The ego vehicle travels **32.5 m in 10.0 s** (mean 3.25 m/s, peaking ~6.5 m/s, b
 at the intersection) while turning **left through 43.9°**. Start **(38.90, 0.00) m** → end
 **(7.85, 2.17) m**; range to the light closes 38.90 → 8.14 m.
 
+Part A — ego trajectory (ground frame)   |   Part B — full BEV scene
+:---------------------------------------:|:--------------------------------:
+<img src="trajectory.png" width="440">    | <img src="bev_scene.png" width="440">
+
 **Part A:** `trajectory.png`, `trajectory.mp4` · **Part B:** `bev_scene.png`, `bev_scene.mp4` ·
 **validation:** `out/method_comparison.png`, `out/bev_validation.png`, `out/diagnostics.png` ·
 **numeric track:** `out/trajectory.csv` (and `out/light_track.csv`, the per-frame 3D landmark
