@@ -1,143 +1,80 @@
-# Computer Vision Challenge: Ego-Trajectory & Bird’s-Eye View Mapping  
+# Ego-Trajectory & BEV Mapping — Wisconsin Autonomous Perception Challenge
+**Lohith Tadiboyana**
 
----
-## Problem Overview
-You are given a short **10-second video** recorded from an **ego-vehicle** (our Autonomous Car with a front-facing stereo camera). The scene includes:  
+## Results
+The ego vehicle travels **32.5 m in 10.0 s** (mean 3.25 m/s, peaking ~6.5 m/s, braking to ~1 m/s
+at the intersection) while turning **left through 43.9°**. Start **(38.90, 0.00) m** → end
+**(7.85, 2.17) m**; range to the light closes 38.90 → 8.14 m.
 
-- A traffic light (fixed, overhead)  
-- Several static barrels  
-- A moving golf cart ahead of us  
-- Occasionally, pedestrians  
+**Part A:** `trajectory.png`, `trajectory.mp4` · **Part B:** `bev_scene.png`, `bev_scene.mp4` ·
+**validation:** `out/method_comparison.png`, `out/bev_validation.png`, `out/diagnostics.png` ·
+**numeric track:** `out/trajectory.csv` (and `out/light_track.csv`, the per-frame 3D landmark
+measurement the solver consumes). Run order: `extract_light` → `visual_odometry` →
+`solve_trajectory` → `plot_trajectory`, `animate_trajectory`, `compare_methods` →
+`track_objects` → `bev_scene`.
 
-Your task is to estimate and visualize the **ego-vehicle’s trajectory in the ground frame**, using the traffic light as a world reference.
-You may then extend your solution by tracking additional objects and rendering a richer **Bird’s-Eye View (BEV)**.  
+## Setup
+`pip install numpy opencv-python matplotlib scipy` (plus `ffmpeg` on PATH for the `.mp4`s).
+Download the dataset via the link in `CHALLENGE.md` and unzip so that `dataset/rgb/`,
+`dataset/xyz/` and `dataset/bbox_light.csv` sit at the repo root (4 GB, gitignored).
 
-Use any tools you like — chatGPT and other assistants are highly encouraged. Please **do not** flood our e-mails with simple questions. GenAI is you friend.  
+## Method
+Each frame yields one measurement: the 3D vector from the car to the light, `q_t` (bbox → robust
+median of the valid XYZ inside it; 295/299 frames). The light is static at the world origin, so
 
-<img src="WA Challenge.gif" width="500"> 
+> `C_t = −R(θ_t) q_t`  →  in polar form about the light, `C_t = r_t(cos φ_t, sin φ_t)`
 
----
-## Part A (Expected)
+`r_t` is measured every frame and **never integrated, so the trajectory cannot drift in scale.**
+All uncertainty collapses into the single angle `φ_t`.
 
-1. **Traffic Light Tracking**  
-   - You are provided with a CSV file containing the bounding box of the traffic light in each frame:  
-     ```
-     frame_id, x_min, y_min, x_max, y_max
-     ```
-   - Use the bounding box center (u, v) as the pixel location of the traffic light. Alternatively, you could look into averging depth of a patch around the center for better noise sensitivity.   
-
-2. **3D Position from Depth Data**  
-   - Each frame has a `.npz` file containing a 3D array of shape `(H, W, 3)`.  
-   - This array encodes the point cloud in camera coordinates (meters).  
-   - Camera coordinate system:  
-     - +X → forward (aligned with car heading)  
-     - +Y → right axis  
-     - +Z → upward (perpendicular to ground, right-handed system)  
-   - Depth maps give these values relative to the **top of the car**, with the camera centered along the vehicle width.  
-   - Example (Python):  
-     ```python
-     import numpy as np
-     xyz = np.load("xyz/frame_0001.npz")["points"]  # shape (H, W, 3)
-     u, v = 640, 360  # example pixel location
-     X, Y, Z = xyz[v, u]  # meters in camera coordinates; i.e. gets you absolute X,Y,Z from the center of the camera to the real world point represented by the pixel.
-     ```
-
-3. **Trajectory Extraction (Ground Frame Definition)**  
-   - Define the **traffic light** as the reference world point.  
-   - World frame setup:  
-     - The **origin** is directly under the traffic light on the ground.  
-     - The **Z-axis** passes upward through the traffic light.  
-     - At t = 0, the line joining the car and the traffic light is aligned with the **+X axis**.  
-     - This defines a right-handed coordinate system with (X forward, Y left, Z up).  
-   - Use the apparent motion of the traffic light in the ego-camera frame to compute the ego-vehicle’s trajectory `(x_m, y_m)` projected onto the ground plane.  
-
-4. **Outputs**  
-   - `trajectory.png` (required): still plot of the ego-vehicle trajectory in BEV coordinates (X,Y plane; do not worry about the height in the final output) .  
-   - `trajectory.mp4` (optional): animated BEV trajectory video (trajectory is drawn on a plot as a function of time)  
-
-#### Here is a sample output for your reference.
-
-<img src="sample_static_BEV_plot.png" width="500">
- 
-You dont have to make yours look similar as long as it is legible.
-#### Your output might not look as stable and that is OK. The trajectory can be a bunch of discrete points, you don't need a solid line.
----
-
-## Part B (Optional — Extra Credit)
-
-Enhance your BEV scene by including other objects:  
-- Golf cart (dynamic)  
-- Barrels (static)  
-- Other traffic lights or pedestrians (if visible)  
-
-Note: Do not worry about the length of the objects, just plot the centers of the regions visible in the BEV.
-
-**Expectations:**  
-- Track additional objects in RGB (any method: color thresholding, template matching, ML, etc.)  
-- Use depth/XYZ values to place them in the BEV  
-- Render them along with your ego trajectory  
-- Moving objects (golf cart, pedestrians) should update over time  
-- You could have the traffic light color in the BEV video.
-- Creativity is encouraged — richer BEVs score higher
-- This optional part's BEV can be in car frame making your life a bit easy.   
-
-
- Sample Ground-Frame Animation                          |   Sample Ego-Frame Animation
-:-------------------------:|:-------------------------:
-<img src="sample_animated_BEV_groundFrame.gif" width="450"> | <img src="sample_animated_BEV_egoFrame.gif" width="450">
-
----
-
-## Dataset Structure
+**The catch:** a pose has 3 DOF but one landmark gives only 2 numbers per frame, so `φ` is
+*unobservable* — orbiting the light while counter-rotating the heading is indistinguishable. I
+close the gap with the **non-holonomic constraint**: a car rolls along its heading and cannot
+slide sideways. Per frame it advances `s` and turns `Δθ`, making the system exactly determined:
 
 ```
-dataset/
-│
-├── rgb/ # Left camera RGB images
-│ ├── frame_0001.png # (H, W, 3), uint8
-│ ├── frame_0002.png
-│ └── ...
-│
-├── xyz/ # Depth-based 3D point clouds
-│ ├── frame_0001.npz # Contains key "points" → (H, W, 3), float32 in meters
-│ ├── frame_0002.npz
-│ └── ...
-│
-└── bboxes_light.csv # Traffic light bounding box per frame
- # Columns: frame_id,x_min,y_min,x_max,y_max
-
+lengths:  r²(t+1) = (X − s)² + y²                  →  s   (recovers speed from range alone)
+angles :  Δφ = atan2(y, X − s) − atan2(y, X)       →  angular progress around the light
 ```
 
-### <u>Download the [DATASET](https://drive.google.com/drive/folders/1wkmImXqQL9wCURVyenqh8MGGuM2N2m8u?usp=drive_link)</u>
+The derivation, and the rewrite that removes a catastrophic-cancellation instability, are
+documented in `src/solve_trajectory.py`.
 
-**Notes on data:**  
-- Image size: 1920 × 1200 pixels (RGB).  
-- Point cloud `.npz` files correspond 1:1 with RGB frames.  
-- Depth may have noise or invalid values (0/NaN) — handle gracefully.  
+## Assumptions
+Non-holonomic vehicle (validated below, not merely assumed); planar motion; 29.9 fps; `φ₀ = 0`,
+placing the car on **+X** at t=0 per the spec. Frame-to-frame range noise (σ ≈ 0.48 m) is **5×
+the per-frame motion** (0.10 m), so Savitzky–Golay smoothing before differentiation is mandatory.
 
----
+## ⚠ `+Y` is LEFT, not right
+The spec states *"+X forward, +Y right, +Z upward (right-handed)"* — but X-fwd/Y-right/Z-up is a
+**left**-handed triad, so the statement contradicts itself. Verified two ways
+(`src/verify_axes.py`): ground pixels at the image's left edge give `Y=+3.21`, the right edge
+`Y=−3.27`; and the light's `Y` sign tracks its pixel column. **Taking the spec literally inverts
+the turn direction.** Also: arrays are `(1200,1920,4)` under key `"xyz"`; invalid pixels are
+`NaN` **and `inf`**; frames 3, 4, 5, 23 have no bbox.
 
-## Submission Requirements
+## Validation — three independent checks
+1. **Visual odometry.** To *test* the non-holonomic assumption rather than trust it, I measured
+   the rotation instead: ORB matches → Kabsch inside RANSAC on their 3D points. RANSAC is
+   load-bearing — the cart and pedestrians move and are outvoted by the static background.
+   296/296 pairs, median 274 inliers. **Heading +43.94° vs +43.87°**; mean position disagreement
+   **0.22 m over a 32.5 m path (0.68%)**.
+2. **Landmark height.** The light's `Z` is **3.64 ± 0.15 m** across all 299 frames — and `Z` is
+   discarded before solving, so its constancy is free evidence.
+3. **Static objects stay static.** Part B detections are lifted to world coordinates using the
+   Part A pose. Barrels seen in the first and last 5 s coincide; RMS wander **0.50 m** — an upper
+   bound, since driving past a barrel shifts its visible centroid.
 
-1. `trajectory.png` (required)  
-2. `trajectory.mp4` (required)  
-3.  Your Code
-4.  Any extra plots, overlays, or videos
-5. `README.md` (max 1 page):  
-   - Describe your method, assumptions, and results
+## Part B
+**Barrels — colour:** HSV, height-gated at both ends (above rejects the amber light housings;
+below rejects the double-yellow road line, which passes an orange test but lies flat).
+**Cart and pedestrians — geometry:** ground removal, then 3D voxel clustering, which separates
+objects that overlap in the image but differ in depth. Cart tracked **284/299** frames;
+pedestrians must persist across ≥12 frames. **Light state:** the lit blob's hue *plus* lamp
+position — naive hue fails twice, since the tan housing outnumbers the lamp pixels and the green
+LED saturates to cyan. Result: **red frames 0–27, green 28–298**.
 
-Please create a <u>PUBLIC</u> GitHub repository and [submit](https://docs.google.com/forms/d/e/1FAIpQLSe55-Y66YOcldUcrppVq9P2DhvAHYgOKR8xSL_dUpPcKIOrZg/viewform?usp=sharing&ouid=113587858663372351737) your link to the application.
-
----
-
-## Evaluation Criteria 
-
-- Correctness → Is the ego trajectory reasonable in the defined ground frame?   
-- Clarity → Is your report correct or are your ideas right?  
-- Each criteria will be graded on a scale of 1-5.
-
-- Remember, it's OK to attempt it all and fail as long as you learn something and document it well you would have a good shot at it.
-
----
-##### [Interesting stuff from NVIDIA](https://build.nvidia.com/nvidia/bevformer) for the curious.
-<img src="bevformer.jpeg" width="500">
+## Limitations
+`φ` is the only integrated quantity, so slow angular drift is the failure mode (bounded at ~1.3°
+here); a second landmark would make the pose fully observable. The non-holonomic assumption would
+degrade on ice or under hard cornering, and the smoothing window would attenuate a sharp manoeuvre.
